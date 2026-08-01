@@ -30,7 +30,7 @@ enum HostCommand {
         Data("ICON,\(slot),0,\(w),\(h)\n".utf8)
     }
     /// 完整 ICON 消息：头 + RGB565 像素数据（可直接发送）
-    static func iconMessage(slot: Int, rgb565: Data, w: Int = 48, h: Int = 48) -> Data {
+    static func iconMessage(slot: Int, rgb565: Data, w: Int = 24, h: Int = 24) -> Data {
         var msg = iconHeader(slot: slot, w: w, h: h)
         msg.append(rgb565)
         return msg

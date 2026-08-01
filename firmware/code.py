@@ -21,7 +21,7 @@ from display_driver import Display
 KEY_PINS = [microcontroller.pin.P0_31, microcontroller.pin.P0_29,
             microcontroller.pin.P1_15, microcontroller.pin.P1_13,
             microcontroller.pin.P1_11]
-ICON_MAX_PIXELS = 48 * 48 * 4   # 单个 ICON 最大像素（48×48图标，4倍安全余量）
+ICON_MAX_PIXELS = 24 * 24 * 4   # 单个 ICON 最大像素（24×24图标，4倍安全余量）
 KEY_DEBOUNCE = 3                 # 按键去抖帧数（3×15ms≈45ms）
 GC_INTERVAL = 30                 # 每 30 帧 gc.collect()（≈450ms）
 

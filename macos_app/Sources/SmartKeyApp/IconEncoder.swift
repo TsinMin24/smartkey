@@ -1,14 +1,14 @@
 //
 //  IconEncoder.swift
-//  提取 macOS App 图标 → 48×48 RGB565 像素数据
+//  提取 macOS App 图标 → 24×24 RGB565 像素数据
 //
 import AppKit
 import CoreGraphics
 
 enum IconEncoder {
-    private static let size = 48
+    private static let size = 24
 
-    /// 从 .app 路径提取图标，输出 RGB565 原始字节（48×48×2 = 4608B）
+    /// 从 .app 路径提取图标，输出 RGB565 原始字节（24×24×2 = 1152B）
     static func encode(appPath: String) -> Data? {
         guard let appUrl = URL(string: "file://\(appPath)"),
               let img = NSWorkspace.shared.icon(forFile: appUrl.path).cgImage(
@@ -19,7 +19,7 @@ enum IconEncoder {
         return renderToRGB565(cgImage: img)
     }
 
-    /// 渲染 CGImage → 48×48 RGB565
+    /// 渲染 CGImage → 24×24 RGB565
     private static func renderToRGB565(cgImage: CGImage) -> Data? {
         let w = size, h = size
         guard let ctx = CGContext(
