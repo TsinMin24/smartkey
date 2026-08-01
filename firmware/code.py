@@ -93,8 +93,8 @@ while True:
                 if cmd.startswith("ICON"):
                     parts = cmd.split(",")
                     slot = int(parts[1]) - 1   # slot 1-5 → 0-4
-                    x, y = int(parts[2]), int(parts[3])
-                    w, h = int(parts[4]), int(parts[5])
+                    w = int(parts[3])          # ICON,<slot>,0,<w>,<h>
+                    h = int(parts[4])
                     # 尺寸保护：超大图标直接拒绝，防内存耗尽
                     if w * h > ICON_MAX_PIXELS or w <= 0 or h <= 0:
                         print("[ICON 拒绝] 尺寸超限", w, h)
@@ -103,15 +103,17 @@ while True:
                         print("[ICON 拒绝] slot 超限", slot + 1)
                         continue
                     target = w * h * 2
-                    data = bytearray()
+                    # 预分配固定缓冲，边收边填充，避免动态扩容峰值内存
+                    data = bytearray(target)
                     rcvd = 0
                     while rcvd < target and ble.connected:
-                        chunk = uart.read(min(512, target - rcvd))
+                        chunk = uart.read(min(256, target - rcvd))
                         if chunk:
-                            data.extend(chunk)
-                            rcvd += len(chunk)
-                    if len(data) >= target:
-                        dm.draw_slot_icon(slot, w, h, bytes(data[:target]))
+                            n = len(chunk)
+                            data[rcvd:rcvd + n] = chunk
+                            rcvd += n
+                    if rcvd >= target:
+                        dm.draw_slot_icon(slot, w, h, data)
                         uart.write("OK\n".encode())
                 elif cmd.startswith("SLOT"):
                     parts = cmd.split(",", 2)
