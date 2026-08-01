@@ -1,0 +1,27 @@
+{
+  "device_name": "SmartKey",
+  "long_press_ms": 600,
+  "repeat_ms": 300,
+  "slots": {
+    "1": {
+      "name": "复制",
+      "action": { "type": "shortcut", "keys": ["cmd", "c"] }
+    },
+    "2": {
+      "name": "粘贴",
+      "action": { "type": "shortcut", "keys": ["cmd", "v"] }
+    },
+    "3": {
+      "name": "截屏",
+      "action": { "type": "shortcut", "keys": ["cmd", "shift", "3"] }
+    },
+    "4": {
+      "name": "打开Safari",
+      "action": { "type": "launch", "path": "/Applications/Safari.app" }
+    },
+    "5": {
+      "name": "打开网址",
+      "action": { "type": "open_url", "url": "https://www.google.com" }
+    }
+  }
+}

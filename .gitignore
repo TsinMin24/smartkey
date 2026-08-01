@@ -1,0 +1,52 @@
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Xcode / Swift
+.build/
+DerivedData/
+*.xcuserstate
+*.xcodeproj/
+*.pbxproj
+
+# 构建产物（不提交二进制 App）
+*.app/
+desktop/dist/
+desktop/build/
+macos_app/.build/
+
+# 编译产物
+*.o
+*.elf
+*.hex
+*.map
+*.zip
+*.uf2
+
+# 日志
+*.log
+
+# 板子备份
+firmware/board_backup/
+firmware/adafruit_ble_py.bak/
+firmware/code.py.bak*
+firmware/code.py.with_erase
+
+# macOS 元数据
+._*
+.Trashes
+.fseventsd
+
+# 备份文件
+*.bak.old
+*.bak
+
+# 图标检查文件
+desktop/icons/icons_check.png
