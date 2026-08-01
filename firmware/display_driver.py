@@ -120,3 +120,16 @@ class Display:
             self.bus.send(0x2C, data[off:off + take])
             off += take
             rem -= take
+
+    def draw_slot_icon(self, slot, w, h, data):
+        """将图标绘制到纵向槽位 slot(0-4) 内居中"""
+        if slot < 0 or slot > 4:
+            return
+        # 槽位区域: x=6, y=82+slot*38, 尺寸64x28
+        sx = _SLOT_X
+        sy = _SLOT_Y0 + slot * _SLOT_GAP
+        ix = sx + (_SLOT_W - w) // 2
+        iy = sy + (_SLOT_H - h) // 2
+        if iy < 0:
+            iy = 0
+        self.draw_icon(ix, iy, w, h, data)
