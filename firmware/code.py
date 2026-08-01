@@ -2,10 +2,10 @@
 # 协议：电脑端软件 ⇄ 板子
 #   板子→电脑: DOWN,1..5 / UP,1..5         按键按下/释放
 #   电脑→板子: PING → PONG
-#              STATUS,<hex24>              状态窗颜色
-#              SLOT,<n>,<名称>              记录槽位名称（显示用）
-#              ICON,<x>,<y>,<w>,<h>\n<RGB565字节>  直绘位图
-# 屏幕 76x284：顶部名称条 / 状态窗 / 5 个槽位（每槽 64x28，图标 56x20）
+#              STATUS,<hex24>              状态条颜色
+#              SLOT,<n>,<名称>              记录槽位名称
+#              ICON,<slot>,0,48,48\n<RGB565字节>  绘制App图标到指定slot
+# 屏幕横向 284x76：5个slot，每slot 56px宽，图标48×48居中
 import gc
 import time
 import digitalio
@@ -21,7 +21,7 @@ from display_driver import Display
 KEY_PINS = [microcontroller.pin.P0_31, microcontroller.pin.P0_29,
             microcontroller.pin.P1_15, microcontroller.pin.P1_13,
             microcontroller.pin.P1_11]
-ICON_MAX_PIXELS = 56 * 20 * 4   # 单个 ICON 最大像素（限制 4 倍槽位图标，防 OOM）
+ICON_MAX_PIXELS = 48 * 48 * 4   # 单个 ICON 最大像素（48×48图标，4倍安全余量）
 KEY_DEBOUNCE = 3                 # 按键去抖帧数（3×15ms≈45ms）
 GC_INTERVAL = 30                 # 每 30 帧 gc.collect()（≈450ms）
 
@@ -92,10 +92,15 @@ while True:
             try:
                 if cmd.startswith("ICON"):
                     parts = cmd.split(",")
-                    x, y, w, h = int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
+                    slot = int(parts[1]) - 1   # slot 1-5 → 0-4
+                    x, y = int(parts[2]), int(parts[3])
+                    w, h = int(parts[4]), int(parts[5])
                     # 尺寸保护：超大图标直接拒绝，防内存耗尽
-                    if w * h > ICON_MAX_PIXELS or w <= 0 or h <= 0 or x < 0 or y < 0:
+                    if w * h > ICON_MAX_PIXELS or w <= 0 or h <= 0:
                         print("[ICON 拒绝] 尺寸超限", w, h)
+                        continue
+                    if slot < 0 or slot > 4:
+                        print("[ICON 拒绝] slot 超限", slot + 1)
                         continue
                     target = w * h * 2
                     data = bytearray()
@@ -106,7 +111,7 @@ while True:
                             data.extend(chunk)
                             rcvd += len(chunk)
                     if len(data) >= target:
-                        dm.draw_icon(x, y, w, h, bytes(data[:target]))
+                        dm.draw_slot_icon(slot, w, h, bytes(data[:target]))
                         uart.write("OK\n".encode())
                 elif cmd.startswith("SLOT"):
                     parts = cmd.split(",", 2)
