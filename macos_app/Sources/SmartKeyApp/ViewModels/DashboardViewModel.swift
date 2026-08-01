@@ -109,6 +109,10 @@ final class DashboardViewModel: ObservableObject {
 
     // MARK: - 绑定传输层
     private func bindTransport() {
+        transport.onReady = { [weak self] in
+            // 特征就绪后才同步，避免发送失败
+            self?.syncSlotsToBoard()
+        }
         transport.connectionStateSubject
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
@@ -152,7 +156,7 @@ final class DashboardViewModel: ObservableObject {
             persistBLEConfig()
             appendLog("已记住设备 \(device.name)")
         }
-        syncSlotsToBoard()
+        // 特征就绪后由 transport.onReady 触发 syncSlotsToBoard
     }
 
     // MARK: - 接收数据处理
@@ -233,42 +237,53 @@ final class DashboardViewModel: ObservableObject {
 
     /// 连接后把槽位名称推给板子屏幕
     private func syncSlotsToBoard() {
-        for slot in slots {
-            transport.send(data: HostCommand.slot(slot.id, name: slot.name))
-            Thread.sleep(forTimeInterval: 0.05)
+        let slots = self.slots
+        // 逐个延迟发送，避免 Thread.sleep 阻塞主线程
+        for (idx, slot) in slots.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(idx) * 0.05) { [weak self] in
+                self?.transport.send(data: HostCommand.slot(slot.id, name: slot.name))
+            }
         }
-        transport.send(data: HostCommand.status(hex: "00FF00"))
-        appendLog("已推送槽位配置到板子")
-        // 连接后推送所有 App 模式槽位的图标
-        syncIconsToBoard()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(slots.count) * 0.05) { [weak self] in
+            self?.transport.send(data: HostCommand.status(hex: "00FF00"))
+            self?.appendLog("已推送槽位配置到板子")
+            self?.syncIconsToBoard()
+        }
     }
 
-    /// 提取并发送 App 图标到板子（slot=1~5）
+    /// 提取并发送 App 图标（2色掩码单包）到板子（slot=1~5）
     func sendSlotIcon(slotId: Int, appPath: String) {
-        guard case .connected = connectionState else {
-            appendLog("⚠️ 未连接，跳过图标发送")
-            return
-        }
-        guard let rgb565 = IconEncoder.encode(appPath: appPath) else {
+        guard let icon = IconEncoder.encode(appPath: appPath) else {
             appendLog("❌ 图标提取失败")
+            AppLog.log("sendSlotIcon: 图标提取失败 \(appPath)")
             return
         }
-        let msg = HostCommand.iconMessage(slot: slotId, rgb565: rgb565)
-        appendLog("📤 发送图标到 slot \(slotId)（\(rgb565.count)B RGB565）")
+        let msg = HostCommand.iconMessage(slot: slotId,
+                                          fg565: icon.fg565,
+                                          bg565: icon.bg565,
+                                          mask: icon.mask)
+        appendLog("📤 发送图标到 slot \(slotId)（掩码\(icon.mask.count)B）")
+        AppLog.log("sendSlotIcon: slot=\(slotId) mask=\(icon.mask.count)B fg=\(String(format: "%04X", icon.fg565)) crc=\(String(format: "%04X", HostCommand.crc16(icon.mask)))")
         transport.send(data: msg)
     }
 
     /// 连接后同步所有 App 槽位图标到板子
     private func syncIconsToBoard() {
-        for slot in slots where slot.mode == "app" {
-            if let path = slot.appPath, !path.isEmpty {
-                Thread.sleep(forTimeInterval: 0.2)
-                sendSlotIcon(slotId: slot.id, appPath: path)
+        let slots = self.slots.filter { $0.mode == "app" && !($0.appPath ?? "").isEmpty }
+        for (idx, slot) in slots.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(idx) * 0.15) { [weak self] in
+                self?.sendSlotIcon(slotId: slot.id, appPath: slot.appPath!)
             }
         }
     }
 
     // MARK: - 日志
+    func clearLogs() {
+        DispatchQueue.main.async {
+            self.logs.removeAll()
+        }
+    }
+
     private func appendLog(_ text: String) {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"

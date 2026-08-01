@@ -1,16 +1,15 @@
 # SmartKey — BLE 无线按键板
 
 nRF52840 (nice!nano) + ST7789 76×284 屏幕 + 5 按键，通过 BLE UART 与电脑通信。
-电脑端软件把「按键」翻译成任意动作（快捷键 / 输入文字 / 启动程序 / 打开网址），
-类似 Stream Deck / TourBox 的架构。
+电脑端软件把「按键」翻译成任意动作（快捷键 / 启动程序），类似 Stream Deck / TourBox 的架构。
 
 ```
-nRF52840 (SmartKey)                      电脑端软件 (常驻后台)
+nRF52840 (SmartKey)                      电脑端 Swift 上位机 (macOS 菜单栏 App)
 ┌──────────────────┐    BLE UART     ┌──────────────────────────┐
 │ 5 个按键          │ ──────────────► │ 收到 "DOWN,3"            │
-│ DOWN,3 / UP,3    │                 │ 查 config.json 里 slot3   │
-│ 屏幕显示图标/状态  │ ◄────────────── │ 执行动作(快捷键/启动app等)  │
-│ 接收图标/名称     │   SLOT/ICON命令  │ 推送图标/名称到屏幕         │
+│ DOWN,3 / UP,3    │                 │ 查 slot3 配置            │
+│ 屏幕显示图标/状态  │ ◄────────────── │ 执行动作(快捷键/启动app)   │
+│ 接收 App 图标     │   SLOT/ICON命令 │ 提取 App 图标 → 2色掩码    │
 └──────────────────┘                 └──────────────────────────┘
 ```
 
@@ -20,39 +19,53 @@ nRF52840 (SmartKey)                      电脑端软件 (常驻后台)
 
 ```
 smartkey/
-├── SmartKey.app            # ★ 打包好的 macOS 菜单栏 App（双击运行）
-├── firmware/                # 板子固件（部署到 /Volumes/CIRCUITPY）
-│   ├── code.py              # 主程序：BLE + 按键 + 协议
-│   ├── display_driver.py    # 屏幕驱动（纯 SPI 直绘）
-│   └── adafruit_ble_py.bak  # 旧 .py 库备份（已换 .mpy）
-├── desktop/                 # 电脑端软件（Python + bleak）
-│   ├── controller.py        # 主控制器：连接/事件/重连
-│   ├── actions.py           # 动作执行器
-│   ├── menubar.py           # 菜单栏常驻入口（rumps）
-│   ├── smartkey_protocol.py # 双端共享协议常量
-│   ├── setup.py             # py2app 打包配置
-│   ├── config.json          # 按键动作配置
-│   └── icons/               # 生成的图标
-├── app_assets/              # App 图标（SmartKey.icns）
-├── tools/
-│   └── make_icons.py        # 图标生成器（56×20 RGB565）
-└── run.command              # 命令行启动器（调试用）
+├── macos_app/                # ★ 当前上位机（Swift + SwiftUI）
+│   ├── Package.swift          # SwiftPM 配置
+│   ├── build_app.sh           # 构建脚本 → SmartKeyHost.app
+│   └── Sources/SmartKeyApp/
+│       ├── AppLog.swift           # 文件日志（~/Library/Logs/SmartKeyHost/）
+│       ├── ActionEngine.swift     # 动作执行器（快捷键/启动 App）
+│       ├── IconEncoder.swift      # App 图标 → 2色掩码（24×24, 1bit/像素）
+│       ├── Protocol/Protocol.swift # 行文本协议 + CRC16 + 掩码打包
+│       ├── Transport/BLEManager.swift      # CoreBluetooth 传输层（NUS）
+│       ├── Transport/DeviceTransport.swift # 传输层抽象协议
+│       ├── ViewModels/DashboardViewModel.swift # 业务逻辑与状态机
+│       └── Views/DashboardView.swift       # SwiftUI 界面（设备/槽位/日志）
+├── firmware/                 # 板子固件（部署到 /Volumes/CIRCUITPY）
+│   ├── code.py               # 主程序：BLE + 按键 + 协议
+│   ├── display_driver.py     # 屏幕驱动（纯 displayio，无裸 SPI）
+│   └── boot.py               # 开机脚本
+├── desktop/                  # 旧 Python 版（已废弃，保留参考）
+├── app_assets/               # App 图标资源
+├── tools/                    # 工具脚本
+└── README.md
 ```
 
 ---
 
-## 一、板子部署（已完成）
+## 一、板子部署
 
 固件文件在 `firmware/`，直接复制到板子的 CIRCUITPY 根目录：
 
 | 文件 | 说明 |
 |------|------|
 | `code.py` | BLE UART 主程序 |
-| `display_driver.py` | 屏幕驱动 |
+| `display_driver.py` | 屏幕驱动（纯 displayio） |
 | `lib/adafruit_ble/` | BLE 库（`.mpy` 编译版） |
 
-lib 使用 Adafruit CircuitPython Bundle 的 `.mpy` 编译库（10.x-mpy-20260725），
+lib 使用 Adafruit CircuitPython Bundle 的 `.mpy` 编译库（10.x-mpy），
 比 `.py` 源码省一半 flash。缺失的 `services/nordic.mpy` 已补齐。
+
+### 屏幕驱动（display_driver.py）
+
+**完全基于 displayio** —— 界面元素（背景 / 蓝条 / 状态窗 / 槽位）是独立的
+`Bitmap + TileGrid` 叠加，图标是独立 `Bitmap + 2色 Palette`。**不直接调用
+`bus.send()`**，与 displayio 刷新机制零冲突，不会卡死。
+
+- 屏幕 76×284（非标准面板：COLSTART=82, ROWSTART=18，纵向）
+- 5 个 36×36 正方形槽位，水平居中（x=20），垂直间距 40（y 起 82）
+- 槽位选中变白、恢复变暗灰；状态窗连接绿 / 断开橙
+- 图标 24×24 或 32×32，2 色掩码（1bit/像素），居中嵌入槽位
 
 ### 板子端协议
 
@@ -60,13 +73,26 @@ lib 使用 Adafruit CircuitPython Bundle 的 `.mpy` 编译库（10.x-mpy-2026072
 板子 → 电脑:
   DOWN,1..5      按键按下
   UP,1..5        按键释放
+  OK / ERR_CRC   图标接收结果
 
 电脑 → 板子:
   PING              → 板子回 PONG
   STATUS,<hex24>    设置状态窗颜色（如 00FF00）
   SLOT,<n>,<名称>   设置槽位名称
-  ICON,<x>,<y>,<w>,<h>\n<RGB565字节>  直绘位图
+  ICON,<slot>,<w>,<h>,<fg565>,<bg565>,<crc16>,<hex掩码>
+                    2色掩码图标（单行文本，整行一个 BLE 包传完）
 ```
+
+### 图标协议（2色掩码，单包传输）
+
+为避免多包传输导致板子内存/时序问题，图标编码为**单行文本命令**：
+
+- 图标 24×24，提取「前景主色（logo色）」+「背景色（槽位底色）」
+- 1bit/像素掩码：`1` = 前景 logo 像素，`0` = 背景（露出槽位底色）
+- 掩码 72 字节 → hex 编码 → 拼进一行命令（约 170B）
+- 整行**一个 BLE 数据包传完**，无分块、无接收循环、无半包
+- CRC16 校验：坏数据直接丢弃，绝不写入 flash / 屏幕
+- 板子收到后存 flash（`icon_N.bin`），立即渲染，并开机时从 flash 恢复
 
 BLE 细节：
 
@@ -79,126 +105,66 @@ BLE 细节：
 
 ---
 
-## 二、电脑端运行
+## 二、上位机运行（Swift 版）
 
-### 首次安装依赖
-
-```bash
-cd smartkey
-/opt/homebrew/bin/python3.12 -m venv .venv    # 或 python3.12 -m venv .venv
-.venv/bin/pip install bleak pynput Pillow
-```
-
-> 建议用 Python 3.12（Homebrew：`brew install python@3.12`）。
-> bleak 在 macOS 上 3.12 最稳定。
-
-### 启动（macOS App，推荐）
-
-**直接双击项目根目录的 `SmartKey.app`**。这是打包好的菜单栏常驻应用：
-
-- 启动后在**菜单栏**（屏幕右上角）显示 SmartKey 状态图标
-- 点图标可看到：连接状态、重连设备、打开配置、图标文件夹、退出
-- 后台自动连接板子，断线自动重连
-- 无 Dock 图标，不占 Dock 空间
-
-> ⚠️ **首次运行**：macOS 会弹「SmartKey 想要使用蓝牙」授权框，
-> 点**允许**。如果误拒，去 **系统设置 → 隐私与安全性 → 蓝牙** 手动授权。
-> App 的 Info.plist 已内置蓝牙权限描述，不会再出现命令行那种 TCC 崩溃。
-
-> 快捷键 / 输入文字依赖 pynput 模拟键盘，还需要授权：
-> **系统设置 → 隐私与安全性 → 辅助功能 → 勾选 SmartKey**。
-
-### 重新打包（改代码后）
+### 构建
 
 ```bash
-cd smartkey/desktop
-../.venv/bin/python setup.py py2app --clean   # 或 rm -rf build dist && python setup.py py2app
+cd macos_app
+./build_app.sh        # 编译并组装 SmartKeyHost.app
 ```
 
-### 命令行方式（调试用）
+产物在 `.build/release/SmartKeyHost.app`，复制到 `/Applications` 运行。
 
-```bash
-cd smartkey/desktop
-../.venv/bin/python controller.py --scan     # 扫描设备
-../.venv/bin/python controller.py            # 正常运行
-../.venv/bin/python controller.py --fake     # 模拟板子自测（无需 BLE）
-../.venv/bin/python controller.py --debug    # 调试日志
-```
+### 使用
+
+- 扫描并连接板子（名字 `SmartKey`，带 NUS 服务）
+- 配置 5 个槽位：快捷键 / 启动 App（可选图标）
+- 连接后自动同步槽位配置 + App 图标到板子
+- 日志窗口显示收发记录，支持「清空」
+
+> ⚠️ **首次运行**：macOS 会弹「SmartKeyHost 想要使用蓝牙」授权框，点**允许**。
+> 重新安装 App（ad-hoc 签名）会重置蓝牙授权，需重新授权。
+> 快捷键依赖辅助功能授权：系统设置 → 隐私与安全性 → 辅助功能。
 
 ---
 
-## 三、按键配置（config.json）
-
-每个按键是一个 slot，动作类型：
-
-```json
-{
-  "slots": {
-    "1": { "name": "复制",          "action": { "type": "shortcut", "keys": ["cmd", "c"] } },
-    "2": { "name": "粘贴",          "action": { "type": "shortcut", "keys": ["cmd", "v"] } },
-    "3": { "name": "截屏",          "action": { "type": "shortcut", "keys": ["cmd", "shift", "3"] } },
-    "4": { "name": "打开Safari",    "action": { "type": "launch", "path": "/Applications/Safari.app" } },
-    "5": { "name": "打开网址",      "action": { "type": "open_url", "url": "https://www.google.com" } }
-  },
-  "long_press_ms": 600,
-  "repeat_ms": 300
-}
-```
-
-| 类型 | 字段 | 说明 |
-|------|------|------|
-| `shortcut` | `keys` | 快捷键组合，如 `["cmd", "shift", "3"]` |
-| `type` | `text` | 输入一段文字 |
-| `launch` | `path` | 启动应用（`/Applications/XXX.app`） |
-| `open_url` | `url` | 打开网址 |
-| `media` | `key` | 媒体键：play_pause / next_track / previous_track / volume_up / volume_down / mute |
-| `command` | `command` | 执行 shell 命令 |
-
-`long_press_ms`：按住超过该时长进入连续触发模式（适合音量/翻页）。
-`repeat_ms`：连续触发间隔。
-
----
-
-## 四、屏幕布局
+## 三、屏幕布局
 
 ```
 ┌────────────────────────┐
-│ (顶部名称条, 蓝色线)      │  0-17
-│  ■■■ 状态窗 ■■■          │  18-71  连接=绿 / 断开=橙
-│ ┌────────────┐ 槽位1    │  82-110  ← 图标区
-│ │ 图标 + 名称 │          │
-│ ├────────────┤ 槽位2    │  120-148
-│ │            │          │
-│ ├────────────┤ ...     │
-│ └────────────┘ 槽位5    │  272-300
+│ (顶部蓝色条)             │  0-17
+│ ■■■ 状态窗 ■■■           │  18-71  连接=绿 / 断开=橙
+│  ┌──────┐ 槽位1 (36×36) │  82-117  ← 图标区
+│  │ 图标  │              │
+│  ├──────┤ 槽位2         │  122-157
+│  │      │              │
+│  ├──────┤ ...          │
+│  └──────┘ 槽位5         │  242-277
 └────────────────────────┘
 ```
 
-槽位尺寸：64×28，内部图标区 56×20（白图形 + 深底）。
-连接时状态窗变绿，断开变橙；按键按下对应槽位高亮。
+5 个 36×36 正方形槽位，水平居中，间距 40。图标（24×24 / 32×32）居中嵌入。
+按键按下对应槽位高亮变白。
 
 ---
 
-## 五、自定义图标
-
-默认图标是工具生成的简单图形（复制/粘贴/文档/消息/电源）。
-
-想换图标：
-1. 准备 PNG（建议 56×20，RGB 色）；
-2. 写一个小脚本把 PNG 转成 RGB565 大端字节流，替换
-   `desktop/icons/icons.bin`（5 个图标连续拼接，每个 2240 字节）；
-3. 重启 controller.py，自动推送到屏幕。
-
-`tools/make_icons.py` 展示了转换逻辑（`rgb565()` / `rgb565_to_rgb888()`）。
-
----
-
-## 六、故障排查
+## 四、故障排查
 
 | 现象 | 原因 | 解决 |
 |------|------|------|
-| controller.py 启动即崩 (exit 134) | macOS 蓝牙 TCC 权限 | 从 GUI 会话启动，系统设置授权蓝牙 |
-| 快捷键无效 | pynput 无辅助功能权限 | 系统设置 → 辅助功能 授权 |
-| 搜不到 SmartKey | 板子断电 / 广播中断 | 检查板子电源，串口看日志确认广播 |
-| 按键无反应 | 连接断了 / controller 没跑 | 看 controller 日志，等自动重连 |
-| 屏幕图标错位 | RGB565 字节序 | 确认大端（高位在前），重跑 make_icons |
+| 上位机扫描「蓝牙未开启」 | macOS 蓝牙 TCC 授权被重置 | 重新授权：系统设置 → 隐私与安全性 → 蓝牙 |
+| 连接后图标不上屏 | 板子 safe mode / 未运行固件 | 重新插拔板子退出 safe mode，确认 USB 卷挂载 |
+| 板子卡死 | 驱动用裸 SPI 与 displayio 冲突 | 已改用纯 displayio 驱动，不再直接 bus.send |
+| 屏幕显示命令行乱码 | 坏图标数据被渲染 / 终端镜像 | 固件加 CRC 校验丢弃坏数据；清空 root_group |
+| 按键无反应 | 连接断了 | 上位机自动重连，检查日志 |
+
+---
+
+## 五、开发备忘
+
+- **部署固件**：`cp firmware/code.py /Volumes/CIRCUITPY/`，保存后板子 auto-reload
+- **串口调试**：`screen /dev/cu.usbmodem101 115200`，Ctrl-C 进 REPL，Ctrl-D 软重启
+- **构建上位机**：`cd macos_app && ./build_app.sh`
+- **日志位置**：`~/Library/Logs/SmartKeyHost/host.log`
+- **槽位配置**：`~/Library/Application Support/SmartKeyHost/slots.json`

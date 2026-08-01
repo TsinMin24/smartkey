@@ -25,6 +25,8 @@ final class BLEManager: NSObject, DeviceTransportProtocol {
     private var txChar: CBCharacteristic?
     private var discovered: [UUID: ScannedDevice] = [:]
     private var scanTimer: Timer?
+    /// 传输就绪回调：连接且 rxChar/txChar 都发现后调用
+    var onReady: (() -> Void)?
 
     override init() {
         super.init()
@@ -90,12 +92,14 @@ final class BLEManager: NSObject, DeviceTransportProtocol {
         let chunkSize = 180
         if data.count <= chunkSize {
             peripheral.writeValue(data, for: rx, type: .withoutResponse)
+            AppLog.log("send: \(data.count)B 写→rx")
         } else {
             var offset = 0
             while offset < data.count {
                 let end = min(offset + chunkSize, data.count)
                 let chunk = data.subdata(in: offset..<end)
                 peripheral.writeValue(chunk, for: rx, type: .withoutResponse)
+                AppLog.log("send: chunk \(offset)..<\(end) 写→rx")
                 offset = end
             }
         }
@@ -202,13 +206,20 @@ extension BLEManager: CBPeripheralDelegate {
             return
         }
         AppLog.log("发现 \(characteristics.count) 个特征")
+        var foundRx = false, foundTx = false
         for char in characteristics {
-            if char.uuid == rxUUID { rxChar = char }
+            if char.uuid == rxUUID { rxChar = char; foundRx = true }
             if char.uuid == txUUID {
                 txChar = char
+                foundTx = true
                 AppLog.log("设置 notify 监听")
                 peripheral.setNotifyValue(true, for: char)
             }
+        }
+        if foundRx && foundTx {
+            // 特征就绪，通知 ViewModel 可以开始发送
+            AppLog.log("BLE 特征就绪，可以发送")
+            onReady?()
         }
     }
 

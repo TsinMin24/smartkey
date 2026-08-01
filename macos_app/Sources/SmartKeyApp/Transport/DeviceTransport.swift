@@ -38,6 +38,9 @@ protocol DeviceTransportProtocol: AnyObject {
     /// 扫描结果列表
     var discoveredDevicesSubject: CurrentValueSubject<[ScannedDevice], Never> { get }
 
+    /// 传输就绪回调：连接且特征/通道就绪后可发送
+    var onReady: (() -> Void)? { get set }
+
     func scan()
     func stopScan()
     func connect(to device: ScannedDevice)

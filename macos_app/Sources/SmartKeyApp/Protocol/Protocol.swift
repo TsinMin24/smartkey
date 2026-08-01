@@ -25,15 +25,30 @@ enum HostCommand {
     static func status(hex: String) -> Data { Data("STATUS,\(hex)\n".utf8) }
     /// 设置槽位名称
     static func slot(_ n: Int, name: String) -> Data { Data("SLOT,\(n),\(name)\n".utf8) }
-    /// ICON 头部，后接 RGB565 像素数据
-    static func iconHeader(slot: Int, w: Int, h: Int) -> Data {
-        Data("ICON,\(slot),0,\(w),\(h)\n".utf8)
+    /// 完整 ICON 消息：单行 hex（含掩码），整行一个 BLE 包传完
+    /// 格式: ICON,<slot>,<w>,<h>,<fg565hex>,<bg565hex>,<crc16hex>,<hex掩码>\n
+    static func iconMessage(slot: Int, fg565: UInt16, bg565: UInt16, mask: Data) -> Data {
+        let crc = crc16(mask)
+        let hexMask = mask.map { String(format: "%02X", $0) }.joined()
+        let head = "ICON,\(slot),\(IconEncoder.size),\(IconEncoder.size),"
+            + String(format: "%04X,%04X,%04X,", fg565, bg565, crc)
+        return Data((head + hexMask + "\n").utf8)
     }
-    /// 完整 ICON 消息：头 + RGB565 像素数据（可直接发送）
-    static func iconMessage(slot: Int, rgb565: Data, w: Int = 24, h: Int = 24) -> Data {
-        var msg = iconHeader(slot: slot, w: w, h: h)
-        msg.append(rgb565)
-        return msg
+
+    /// CRC16-CCITT：与板子校验一致，坏数据会被板子拒绝
+    static func crc16(_ data: Data) -> UInt16 {
+        var crc: UInt16 = 0xFFFF
+        for byte in data {
+            crc ^= UInt16(byte) << 8
+            for _ in 0..<8 {
+                if crc & 0x8000 != 0 {
+                    crc = (crc << 1) ^ 0x1021
+                } else {
+                    crc <<= 1
+                }
+            }
+        }
+        return crc
     }
 }
 

@@ -12,7 +12,7 @@ struct DashboardView: View {
             HeaderBar(viewModel: viewModel)
             DeviceListSection(viewModel: viewModel)
             SlotConfigSection(viewModel: viewModel)
-            LogTerminal(logs: viewModel.logs)
+            LogTerminal(viewModel: viewModel)
         }
         .padding()
         .frame(minWidth: 560, minHeight: 620)
@@ -262,7 +262,7 @@ struct SlotCard: View {
 
 // MARK: - 通信日志终端（可选中可复制）
 struct LogTerminal: View {
-    let logs: [String]
+    @ObservedObject var viewModel: DashboardViewModel
     @State private var logText: String = ""
 
     var body: some View {
@@ -277,6 +277,11 @@ struct LogTerminal: View {
                     NSPasteboard.general.setString(logText, forType: .string)
                 }
                 .font(.caption)
+                Button("清空") {
+                    viewModel.clearLogs()
+                }
+                .font(.caption)
+                .foregroundColor(.red)
             }
             // TextEditor 原生支持选中 + 复制
             TextEditor(text: $logText)
@@ -291,9 +296,9 @@ struct LogTerminal: View {
         .foregroundColor(.green)
         .cornerRadius(8)
         .onAppear {
-            logText = logs.joined(separator: "\n")
+            logText = viewModel.logs.joined(separator: "\n")
         }
-        .onChange(of: logs) { newLogs in
+        .onChange(of: viewModel.logs) { newLogs in
             logText = newLogs.joined(separator: "\n")
         }
     }
