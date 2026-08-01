@@ -59,16 +59,16 @@ class Display:
         self.display = ST7789(self.bus, width=76, height=284,
                               colstart=COLSTART, rowstart=ROWSTART,
                               rotation=0, invert=False)
-        # 横向模式：顺时针旋转90°
+        # 横向模式：旋转90°
         self.bus.send(0x36, bytes([0x60]))  # MADCTL: MV=1, MX=1
         self._status_color = 0xFFA500
         self._draw_frame()
 
     # ── 底层原语 ──
     def _window(self, x0, y0, x1, y1):
-        # 横向模式：X→RASET(偏移18), Y→CASET(偏移82)
-        self.bus.send(0x2B, struct.pack(">HH", x0 + 18, x1 + 18))
-        self.bus.send(0x2A, struct.pack(">HH", y0 + 82, y1 + 82))
+        # 旋转90°标准算法: CASET(0x2A)走x+colstart(18), RASET(0x2B)走y+rowstart(82)
+        self.bus.send(0x2A, struct.pack(">HH", x0 + 18, x1 + 18))
+        self.bus.send(0x2B, struct.pack(">HH", y0 + 82, y1 + 82))
 
     def _fill_rect(self, x0, y0, x1, y1, c24):
         """x1,y1 包含边界；c24 为 24 位颜色；分块发送避免 MemoryError"""
