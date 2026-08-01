@@ -12,9 +12,9 @@ from adafruit_st7789 import ST7789
 
 W, H = 284, 76   # 横向模式：旋转后逻辑尺寸
 
-# ST7789 内存偏移（横向模式：COLSTART/ROWSTART 互换）
-COLSTART = 18
-ROWSTART = 82
+# ST7789 内存偏移
+COLSTART = 82
+ROWSTART = 18
 
 # 横向5槽布局：每slot宽56px, 图标48×48居中
 _SLOT_W = 56      # 每个 slot 的宽度（284÷5=56，余4px右边留白）
@@ -56,19 +56,19 @@ class Display:
                             chip_select=microcontroller.pin.P1_00,
                             reset=microcontroller.pin.P0_22,
                             baudrate=8000000)
-        self.display = ST7789(self.bus, width=W, height=H,
+        self.display = ST7789(self.bus, width=76, height=284,
                               colstart=COLSTART, rowstart=ROWSTART,
                               rotation=0, invert=False)
-        # 发送 MADCTL 切换为横向模式（顺时针90°）
-        self.bus.send(0x36, bytes([0x60]))  # MV=1, MX=1 → 顺时针旋转90°
+        # 横向模式：顺时针旋转90°
+        self.bus.send(0x36, bytes([0x60]))  # MADCTL: MV=1, MX=1
         self._status_color = 0xFFA500
         self._draw_frame()
 
     # ── 底层原语 ──
     def _window(self, x0, y0, x1, y1):
-        # 直接发 0x2A/0x2B 必须自己补 colstart/rowstart 偏移
-        self.bus.send(0x2A, struct.pack(">HH", x0 + COLSTART, x1 + COLSTART))
-        self.bus.send(0x2B, struct.pack(">HH", y0 + ROWSTART, y1 + ROWSTART))
+        # 横向模式：X→RASET(偏移18), Y→CASET(偏移82)
+        self.bus.send(0x2B, struct.pack(">HH", x0 + 18, x1 + 18))
+        self.bus.send(0x2A, struct.pack(">HH", y0 + 82, y1 + 82))
 
     def _fill_rect(self, x0, y0, x1, y1, c24):
         """x1,y1 包含边界；c24 为 24 位颜色；分块发送避免 MemoryError"""
