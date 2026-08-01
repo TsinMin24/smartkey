@@ -26,8 +26,14 @@ enum HostCommand {
     /// 设置槽位名称
     static func slot(_ n: Int, name: String) -> Data { Data("SLOT,\(n),\(name)\n".utf8) }
     /// ICON 头部，后接 RGB565 像素数据
-    static func iconHeader(x: Int, y: Int, w: Int, h: Int) -> Data {
-        Data("ICON,\(x),\(y),\(w),\(h)\n".utf8)
+    static func iconHeader(slot: Int, w: Int, h: Int) -> Data {
+        Data("ICON,\(slot),0,\(w),\(h)\n".utf8)
+    }
+    /// 完整 ICON 消息：头 + RGB565 像素数据（可直接发送）
+    static func iconMessage(slot: Int, rgb565: Data, w: Int = 48, h: Int = 48) -> Data {
+        var msg = iconHeader(slot: slot, w: w, h: h)
+        msg.append(rgb565)
+        return msg
     }
 }
 

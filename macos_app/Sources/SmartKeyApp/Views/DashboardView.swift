@@ -158,6 +158,8 @@ struct SlotConfigSection: View {
                         viewModel.updateSlotMode(slot, mode: slot.mode,
                                                  keyCode: slot.keyCode,
                                                  appPath: slot.appPath)
+                    }, onAppSelected: { path in
+                        viewModel.sendSlotIcon(slotId: slot.id, appPath: path)
                     })
                 }
             }
@@ -172,6 +174,7 @@ struct SlotConfigSection: View {
 struct SlotCard: View {
     @Binding var slot: SlotAction
     var onUpdate: () -> Void
+    var onAppSelected: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -220,6 +223,7 @@ struct SlotCard: View {
                         chooseApp { path in
                             slot.appPath = path
                             onUpdate()
+                            onAppSelected?(path)
                         }
                     }
                     .font(.caption)

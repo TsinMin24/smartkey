@@ -239,6 +239,33 @@ final class DashboardViewModel: ObservableObject {
         }
         transport.send(data: HostCommand.status(hex: "00FF00"))
         appendLog("已推送槽位配置到板子")
+        // 连接后推送所有 App 模式槽位的图标
+        syncIconsToBoard()
+    }
+
+    /// 提取并发送 App 图标到板子（slot=1~5）
+    func sendSlotIcon(slotId: Int, appPath: String) {
+        guard case .connected = connectionState else {
+            appendLog("⚠️ 未连接，跳过图标发送")
+            return
+        }
+        guard let rgb565 = IconEncoder.encode(appPath: appPath) else {
+            appendLog("❌ 图标提取失败")
+            return
+        }
+        let msg = HostCommand.iconMessage(slot: slotId, rgb565: rgb565)
+        appendLog("📤 发送图标到 slot \(slotId)（\(rgb565.count)B RGB565）")
+        transport.send(data: msg)
+    }
+
+    /// 连接后同步所有 App 槽位图标到板子
+    private func syncIconsToBoard() {
+        for slot in slots where slot.mode == "app" {
+            if let path = slot.appPath, !path.isEmpty {
+                Thread.sleep(forTimeInterval: 0.2)
+                sendSlotIcon(slotId: slot.id, appPath: path)
+            }
+        }
     }
 
     // MARK: - 日志
