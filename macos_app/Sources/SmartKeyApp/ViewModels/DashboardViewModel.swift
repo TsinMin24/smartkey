@@ -4,6 +4,7 @@
 //
 import Foundation
 import Combine
+import AppKit
 
 /// 已保存的 BLE 设备信息
 struct SavedDevice: Codable {
@@ -32,6 +33,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var autoConnect: Bool = false {
         didSet { persistBLEConfig() }
     }
+    @Published var iconPreviews: [Int: NSImage] = [:]
 
     // MARK: - 依赖
     let transport: DeviceTransportProtocol
@@ -43,22 +45,92 @@ final class DashboardViewModel: ObservableObject {
     private var slotsURL: URL { configDir.appendingPathComponent("slots.json") }
     private var bleConfigURL: URL { configDir.appendingPathComponent("ble_config.json") }
     private var lastConnectedDevice: ScannedDevice?
+    /// 自动重连计时器
+    private var reconnectTimer: Timer?
+    /// 是否正在自动重连流程中（避免重复触发）
+    private var isAutoReconnecting = false
+    /// 上次日志提示时间（避免刷屏）
+    private var lastAutoLogTime: Date?
+    /// 目标设备名（已保存的）
+    private var autoTargetName: String?
+    /// 连续重连次数（用于指数退避，连接成功后重置）
+    private var reconnectAttempts = 0
 
     init(transport: DeviceTransportProtocol = BLEManager()) {
         self.transport = transport
         loadSlots()
         loadBLEConfig()
         engine.setActions(slots)
+        generateIconPreviews()
         bindTransport()
         // 启动后自动连接（如果启用且有保存的设备）
         if autoConnect, savedDevice != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.scanDevices()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                    self.autoConnectIfPossible()
-                }
+            autoTargetName = savedDevice?.name
+            // 立即扫描 + 调度重连（只要没连上就持续重试）
+            transport.scan()
+            scheduleReconnect()
+        }
+    }
+
+    // MARK: - 自动连接机制
+    /// 停止自动扫描
+    private func stopAutoScan() {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+        isAutoReconnecting = false
+        transport.stopScan()
+    }
+
+    /// 意外断开后自动重连
+    private func handleUnexpectedDisconnect() {
+        guard autoConnect, savedDevice != nil else { return }
+        appendLog("🔄 连接意外断开，自动重连…")
+        scheduleReconnect()
+    }
+
+    /// 用户主动断开后停止自动重连
+    private func handleUserDisconnect() {
+        stopAutoScan()
+    }
+
+    /// 只要用户想连接（自动连接开启或手动点过），任何非连接状态都持续重试
+    private var userWantsConnection: Bool {
+        autoConnect && savedDevice != nil
+    }
+
+    /// 调度一次重连（延迟递增，避免骚扰蓝牙栈）。连接失败后越来越慢。
+    private func scheduleReconnect() {
+        guard userWantsConnection else { return }
+        // 正在连接/已连接则不重复调度
+        if case .connected = connectionState { return }
+        if case .connecting = connectionState { return }
+        // 已有定时器在跑就不重复创建
+        if reconnectTimer?.isValid == true { return }
+
+        // 指数退避：2s → 4s → 8s → 16s → 30s 封顶
+        reconnectAttempts += 1
+        let delay = min(pow(2.0, Double(reconnectAttempts - 1)) * 2.0, 30.0)
+
+        reconnectTimer?.invalidate()
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.reconnectTimer = nil
+            guard self.userWantsConnection else { return }
+            if case .connected = self.connectionState { return }
+            if case .connecting = self.connectionState { return }
+            // 从扫描结果找目标，找到就连接
+            if let targetName = self.autoTargetName,
+               let target = self.devices.first(where: { $0.name == targetName }) {
+                self.appendLog("🔄 重连 \(targetName)（第\(self.reconnectAttempts)次）…")
+                self.connect(to: target)
+            } else {
+                // 没找到 → 重新扫描，下一轮再试
+                self.transport.scan()
+                self.scheduleReconnect()
             }
         }
+        // 确保扫描在跑（BLEManager.scan 幂等，会先停止再开始）
+        transport.scan()
     }
 
     // MARK: - BLE 配置持久化
@@ -113,6 +185,9 @@ final class DashboardViewModel: ObservableObject {
             // 特征就绪后才同步，避免发送失败
             self?.syncSlotsToBoard()
         }
+        transport.onUnexpectedDisconnect = { [weak self] in
+            self?.handleUnexpectedDisconnect()
+        }
         transport.connectionStateSubject
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
@@ -122,11 +197,16 @@ final class DashboardViewModel: ObservableObject {
                     self?.appendLog("✅ 已连接")
                     AppLog.log("ViewModel: 已连接")
                     self?.onConnected()
+                    self?.reconnectAttempts = 0   // 连接成功，重置退避计数
                 case .error(let msg):
                     self?.appendLog("❌ \(msg)")
                     AppLog.log("ViewModel: 错误 \(msg)")
+                    // 连接失败（加密/超时等）→ 自动重连
+                    self?.scheduleReconnect()
                 case .idle:
                     self?.appendLog("连接断开")
+                    // 只要用户想连接且没连上，就自动重连
+                    self?.scheduleReconnect()
                 default:
                     break
                 }
@@ -197,22 +277,39 @@ final class DashboardViewModel: ObservableObject {
     func connect(to device: ScannedDevice) {
         appendLog("连接 \(device.name)…")
         lastConnectedDevice = device
+        autoTargetName = device.name   // 记住目标，便于失败后重连
         transport.connect(to: device)
     }
 
     func disconnect() {
+        handleUserDisconnect()   // 停止自动重连流程（用户主动断开）
         transport.disconnect()
         appendLog("已断开")
     }
 
     func toggleAutoConnect() {
         autoConnect.toggle()
+        if autoConnect {
+            // 打开自动连接：若已保存设备，启动自动连接流程
+            if savedDevice != nil {
+                autoTargetName = savedDevice?.name
+                appendLog("🔄 自动连接已开启，寻找 \(savedDevice?.name ?? "设备")…")
+                transport.scan()
+                scheduleReconnect()
+            }
+        } else {
+            // 关闭自动连接：停止流程
+            stopAutoScan()
+            reconnectTimer?.invalidate()
+            reconnectTimer = nil
+        }
     }
 
     func clearSavedDevice() {
         savedDevice = nil
         autoConnect = false
         persistBLEConfig()
+        stopAutoScan()
         appendLog("已清除已保存设备")
     }
 
@@ -233,12 +330,109 @@ final class DashboardViewModel: ObservableObject {
             slots[idx].appPath = appPath
         }
         engine.setActions(slots)
+        generateIconPreviews()
     }
 
-    /// 连接后把槽位名称推给板子屏幕
+    // MARK: - 图标预览
+    func generateIconPreviews() {
+        var previews: [Int: NSImage] = [:]
+        for slot in slots {
+            let rgbData: Data?
+            if slot.mode == "app", let path = slot.appPath, !path.isEmpty {
+                rgbData = IconEncoder.encode(appPath: path)
+            } else {
+                rgbData = IconEncoder.keyIcon()
+            }
+            if let data = rgbData {
+                previews[slot.id] = Self.rgbToNSImage(data)
+            }
+        }
+        iconPreviews = previews
+    }
+
+    /// RGB565 原始数据 → NSImage（用于 UI 预览）
+    private static func rgbToNSImage(_ data: Data) -> NSImage {
+        let s = IconEncoder.size
+        let bmp = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: s, pixelsHigh: s,
+                                   bitsPerSample: 8, samplesPerPixel: 3,
+                                   hasAlpha: false, isPlanar: false,
+                                   colorSpaceName: .deviceRGB,
+                                   bytesPerRow: s * 3, bitsPerPixel: 24)!
+        let px = bmp.bitmapData!
+        for i in 0..<(s * s) {
+            let c = UInt16(data[i*2]) | UInt16(data[i*2+1]) << 8
+            let off = i * 3
+            px[off]     = UInt8(((c >> 11) & 0x1F) << 3)
+            px[off + 1] = UInt8(((c >> 5) & 0x3F) << 2)
+            px[off + 2] = UInt8((c & 0x1F) << 3)
+        }
+        let img = NSImage(size: NSSize(width: s, height: s))
+        img.addRepresentation(bmp)
+        return img
+    }
+
+    // MARK: - 手动推送图标（USB MSC：全色 RGB565）
+    /// 推送单个槽位图标到板子
+    func pushSlotIcon(_ slot: SlotAction) {
+        let ok = writeIconFile(slot.id)
+        if ok, case .connected = connectionState {
+            transport.send(data: Data("REFRESH\n".utf8))
+            appendLog("📤 已发送 REFRESH")
+        }
+    }
+
+    /// 一键推送全部 5 个槽位图标到板子
+    func pushAllIcons() {
+        appendLog("⬆️ 一键推送全部图标…")
+        var allOK = true
+        for slot in slots {
+            if !writeIconFile(slot.id) { allOK = false }
+        }
+        if allOK {
+            appendLog("✅ 全部图标已写入")
+        } else {
+            appendLog("⚠️ 部分图标写入失败")
+        }
+        if case .connected = connectionState {
+            transport.send(data: Data("REFRESH\n".utf8))
+            appendLog("📤 已发送 REFRESH")
+        }
+    }
+
+    /// 生成并写入单个槽位图标 .bin 到 CIRCUITPY 卷，返回是否成功
+    private func writeIconFile(_ slotId: Int) -> Bool {
+        guard let slot = slots.first(where: { $0.id == slotId }) else { return false }
+        let rgbData: Data?
+        if slot.mode == "app", let path = slot.appPath, !path.isEmpty {
+            rgbData = IconEncoder.encode(appPath: path)
+        } else {
+            rgbData = IconEncoder.keyIcon()
+        }
+        guard let data = rgbData else {
+            appendLog("❌ slot\(slotId) 图标生成失败")
+            return false
+        }
+        let volumes = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil)
+        let circuiTPY = volumes?.first(where: { $0.lastPathComponent == "CIRCUITPY" })
+        guard let vol = circuiTPY else {
+            appendLog("❌ 未找到 CIRCUITPY 卷")
+            return false
+        }
+        let fileName = "icon_\(slotId).bin"
+        let dest = vol.appendingPathComponent(fileName)
+        do {
+            try data.write(to: dest)
+            appendLog("  ✅ \(fileName) 已写入（\(data.count)B 全色RGB565）")
+            return true
+        } catch {
+            appendLog("  ❌ \(fileName) 写入失败: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// 连接后把槽位名称推给板子屏幕（图标由用户手动推送）
     private func syncSlotsToBoard() {
         let slots = self.slots
-        // 逐个延迟发送，避免 Thread.sleep 阻塞主线程
         for (idx, slot) in slots.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(idx) * 0.05) { [weak self] in
                 self?.transport.send(data: HostCommand.slot(slot.id, name: slot.name))
@@ -246,34 +440,7 @@ final class DashboardViewModel: ObservableObject {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Double(slots.count) * 0.05) { [weak self] in
             self?.transport.send(data: HostCommand.status(hex: "00FF00"))
-            self?.appendLog("已推送槽位配置到板子")
-            self?.syncIconsToBoard()
-        }
-    }
-
-    /// 提取并发送 App 图标（2色掩码单包）到板子（slot=1~5）
-    func sendSlotIcon(slotId: Int, appPath: String) {
-        guard let icon = IconEncoder.encode(appPath: appPath) else {
-            appendLog("❌ 图标提取失败")
-            AppLog.log("sendSlotIcon: 图标提取失败 \(appPath)")
-            return
-        }
-        let msg = HostCommand.iconMessage(slot: slotId,
-                                          fg565: icon.fg565,
-                                          bg565: icon.bg565,
-                                          mask: icon.mask)
-        appendLog("📤 发送图标到 slot \(slotId)（掩码\(icon.mask.count)B）")
-        AppLog.log("sendSlotIcon: slot=\(slotId) mask=\(icon.mask.count)B fg=\(String(format: "%04X", icon.fg565)) crc=\(String(format: "%04X", HostCommand.crc16(icon.mask)))")
-        transport.send(data: msg)
-    }
-
-    /// 连接后同步所有 App 槽位图标到板子
-    private func syncIconsToBoard() {
-        let slots = self.slots.filter { $0.mode == "app" && !($0.appPath ?? "").isEmpty }
-        for (idx, slot) in slots.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(idx) * 0.15) { [weak self] in
-                self?.sendSlotIcon(slotId: slot.id, appPath: slot.appPath!)
-            }
+            self?.appendLog("已推送槽位名称到板子（图标请点击推送到板子）")
         }
     }
 

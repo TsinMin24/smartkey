@@ -25,8 +25,12 @@ final class BLEManager: NSObject, DeviceTransportProtocol {
     private var txChar: CBCharacteristic?
     private var discovered: [UUID: ScannedDevice] = [:]
     private var scanTimer: Timer?
+    /// 用户主动断开标记（区分"自动重连"与"手动断开"）
+    private var userInitiatedDisconnect = false
     /// 传输就绪回调：连接且 rxChar/txChar 都发现后调用
     var onReady: (() -> Void)?
+    /// 非主动断连回调：连接意外断开时触发（用于自动重连）
+    var onUnexpectedDisconnect: (() -> Void)?
 
     override init() {
         super.init()
@@ -70,10 +74,12 @@ final class BLEManager: NSObject, DeviceTransportProtocol {
         connectionStateSubject.send(.connecting)
         connectedPeripheral = peripheral
         peripheral.delegate = self
+        userInitiatedDisconnect = false
         central.connect(peripheral, options: nil)
     }
 
     func disconnect() {
+        userInitiatedDisconnect = true
         if let peripheral = connectedPeripheral {
             central.cancelPeripheralConnection(peripheral)
         }
@@ -158,22 +164,33 @@ extension BLEManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager,
                         didFailToConnect peripheral: CBPeripheral,
                         error: Error?) {
-        AppLog.log("❌ didFailToConnect: \(error?.localizedDescription ?? "unknown")")
-        connectionStateSubject.send(.error(error?.localizedDescription ?? "连接失败"))
+        let msg = error?.localizedDescription ?? "连接失败"
+        AppLog.log("❌ didFailToConnect: \(msg)")
+        connectionStateSubject.send(.error(msg))
+        // 连接失败（配对信息过期等）→ 重新扫描 + 触发自动重连
+        if !userInitiatedDisconnect {
+            onUnexpectedDisconnect?()
+        }
     }
 
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
         // 用户主动断开 error 为 nil；异常断开 error 非 nil
+        let unexpected = !userInitiatedDisconnect
         if let error = error {
             AppLog.log("⚠️ didDisconnect with error: \(error.localizedDescription)")
         } else {
             AppLog.log("已主动断开")
         }
+        userInitiatedDisconnect = false
         connectionStateSubject.send(.idle)
         rxChar = nil
         txChar = nil
+        if unexpected {
+            AppLog.log("检测到意外断开，触发自动重连")
+            onUnexpectedDisconnect?()
+        }
     }
 }
 

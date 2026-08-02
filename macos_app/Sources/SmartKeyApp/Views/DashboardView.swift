@@ -149,17 +149,29 @@ struct SlotConfigSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("按键配置（默认 F13/F16/F17/F18/F19，可改为打开指定 App）")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            HStack {
+                Text("按键配置（默认 F13/F16/F17/F18/F19，可改为打开指定 App）")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                // 一键推送全部图标
+                if case .connected = viewModel.connectionState {
+                    Button(action: { viewModel.pushAllIcons() }) {
+                        Label("一键推送全部图标", systemImage: "arrow.up.circle.fill")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                }
+            }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
                 ForEach($viewModel.slots) { $slot in
-                    SlotCard(slot: $slot, onUpdate: {
+                    SlotCard(slot: $slot, viewModel: viewModel, onUpdate: {
                         viewModel.updateSlotMode(slot, mode: slot.mode,
                                                  keyCode: slot.keyCode,
                                                  appPath: slot.appPath)
-                    }, onAppSelected: { path in
-                        viewModel.sendSlotIcon(slotId: slot.id, appPath: path)
+                    }, onAppSelected: { _ in
+                        viewModel.generateIconPreviews()
                     })
                 }
             }
@@ -170,18 +182,38 @@ struct SlotConfigSection: View {
     }
 }
 
-/// 单个槽位卡片：模式选择 + 名称 + 参数
+/// 单个槽位卡片：图标预览 + 模式选择 + 名称 + 参数 + 推送按钮
 struct SlotCard: View {
     @Binding var slot: SlotAction
+    @ObservedObject var viewModel: DashboardViewModel
     var onUpdate: () -> Void
     var onAppSelected: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("键 \(slot.id)")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .textSelection(.enabled)
+            HStack(spacing: 6) {
+                Text("键 \(slot.id)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Spacer()
+                // 图标预览
+                if let img = viewModel.iconPreviews[slot.id] {
+                    Image(nsImage: img)
+                        .resizable()
+                        .interpolation(.none)
+                        .frame(width: 32, height: 32)
+                        .border(Color.gray.opacity(0.3))
+                }
+            }
+            // 推送按钮
+            if case .connected = viewModel.connectionState {
+                Button(action: { viewModel.pushSlotIcon(slot) }) {
+                    Label("推送到板子", systemImage: "arrow.up.circle.fill")
+                        .font(.caption2)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+            }
             // 模式选择：功能键 / 打开App / 无
             Picker("", selection: $slot.mode) {
                 Text("功能键").tag("key")

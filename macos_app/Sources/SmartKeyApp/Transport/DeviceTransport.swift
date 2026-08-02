@@ -41,6 +41,9 @@ protocol DeviceTransportProtocol: AnyObject {
     /// 传输就绪回调：连接且特征/通道就绪后可发送
     var onReady: (() -> Void)? { get set }
 
+    /// 非主动断连回调：连接意外断开时触发（用于自动重连）
+    var onUnexpectedDisconnect: (() -> Void)? { get set }
+
     func scan()
     func stopScan()
     func connect(to device: ScannedDevice)

@@ -19,14 +19,15 @@ KEY_PINS = [
     microcontroller.pin.P1_13,
     microcontroller.pin.P1_11,
 ]
-# 2色掩码图标：1bit/像素。24x24=72B 一个 BLE 包传完，不卡死。
-ICON_MAX_PIXELS = 32 * 32   # 最大像素数（掩码字节 = 像素/8）
+# 图标最大像素数（RGB565 16x16=512B / 2色掩码 32x32=128B）
+ICON_MAX_PIXELS = 44 * 44
 KEY_DEBOUNCE = 3
 GC_INTERVAL = 30
 
 
-# ═══ Flash 存取（2色掩码格式）═══
-# 文件格式: [w:2][h:2][fg565:2][bg565:2][crc16:2][掩码数据]
+# ═══ Flash 存取 ═══
+# 2色掩码格式: [w:2][h:2][fg565:2][bg565:2][crc16:2][掩码数据]
+# RGB565 格式: 512B 原始像素（16x16）
 def _icon_path(slot):
     return "icon_%d.bin" % (slot + 1)
 
@@ -64,29 +65,33 @@ def save_icon(slot, w, h, fg, bg, mask):
 def load_icon(slot):
     try:
         with open(_icon_path(slot), "rb") as f:
-            header = f.read(10)
-            if len(header) != 10:
-                return None
-            w = header[0] | (header[1] << 8)
-            h = header[2] | (header[3] << 8)
-            fg = header[4] | (header[5] << 8)
-            bg = header[6] | (header[7] << 8)
-            crc = header[8] | (header[9] << 8)
-            mask = f.read()
-            nb = (w * h + 7) // 8
-            if len(mask) != nb or _crc16(mask) != crc:
-                return None
-            return (w, h, fg, bg, mask)
+            d = f.read()
+            if len(d) == 512:  # 16x16 RGB565 全色
+                return ("rgb", 16, 16, d)
+            if len(d) >= 10:
+                w = d[0] | (d[1] << 8)
+                h = d[2] | (d[3] << 8)
+                fg = d[4] | (d[5] << 8)
+                bg = d[6] | (d[7] << 8)
+                crc = d[8] | (d[9] << 8)
+                mask = d[10:]
+                nb = (w * h + 7) // 8
+                if len(mask) == nb and _crc16(mask) == crc:
+                    return ("mask", w, h, fg, bg, mask)
     except Exception:
-        return None
+        pass
+    return None
 
 
 def render_saved_icons():
     for slot in range(5):
         ic = load_icon(slot)
         if ic:
-            w, h, fg, bg, mask = ic
-            dm.draw_slot_icon(slot, w, h, mask, fg, bg)
+            if ic[0] == "rgb":
+                dm.draw_slot_icon_rgb(slot, ic[1], ic[2], ic[3])
+            else:
+                dm.draw_slot_icon(slot, ic[1], ic[2], ic[5], ic[3], ic[4])
+        gc.collect()
     gc.collect()
 
 
@@ -137,15 +142,18 @@ while True:
         dm.set_status(0xFFA500)  # 断开变橙
     was_conn = ble.connected
 
-    # ── 接收 BLE UART 推送的 2色掩码 Logo ──
+    # ── 接收 BLE UART 命令 ──
     if ble.connected and uart.in_waiting:
         line = uart.readline()
         if line:
             cmd = line.decode("utf-8", "ignore").strip()
             try:
-                if cmd.startswith("ICON"):
+                if cmd == "REFRESH":
+                    # USB 推送图标后重载
+                    render_saved_icons()
+                    uart.write("OK\n".encode())
+                elif cmd.startswith("ICON"):
                     # 协议(单行): ICON,<slot>,<w>,<h>,<fg565>,<bg565>,<crc16>,<hex掩码>
-                    # 整行一个 BLE 包传完；hex 全 ASCII 无换行 readline 安全；无接收循环不卡死
                     parts = cmd.split(",")
                     slot = int(parts[1]) - 1
                     w = int(parts[2])
